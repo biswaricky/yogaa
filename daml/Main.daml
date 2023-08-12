@@ -1,0 +1,113 @@
+module Main where
+
+
+data YogaPlan = Online | Offline | Flexi deriving (Show,Eq)
+data GenderType = Male | Female deriving (Show,Eq)
+
+
+--information of address
+data Address = Address with
+    house:Text
+    street:Text
+    city:Text
+    pincode:Int
+        deriving (Show,Eq)
+
+
+--memer details
+data Person = Person with
+  id:Party
+  firstName:Text
+  lastName:Text
+  age:Int
+  birthDate:Date
+  mobile: Text
+  email:Optional Text
+  address:Address
+      deriving (Show,Eq)
+
+template YogaEnquiry
+    with
+        member:Person
+        owner:Party
+        enquiryId:Int
+        enquiryDate:Date
+        plan:YogaPlan
+        gender:GenderType
+    where
+        signatory member.id
+        observer owner
+
+        ensure (enquiryId>0)
+
+        key(enquiryId,member.id):(Int,Party)
+        maintainer key._2
+
+        choice RequestCallBack : ContractId YogaMembershipEnrollment
+          controller member.id 
+          do
+            assertMsg "Invalid Age!!" (member.age>13 && member.age<71)
+            create YogaMembershipEnrollment with 
+              proposer = member.id
+              receiver = owner
+              eqnuiry = this 
+              status = "Callback"
+
+        choice BookFreeSession : ContractId YogaMembershipEnrollment
+          controller member.id 
+          do
+            assertMsg "Invalid Age!!" (member.age>13 && member.age<71)
+            create YogaMembershipEnrollment with 
+              proposer = member.id
+              receiver = owner
+              eqnuiry = this 
+              status = "FreeTrial"
+
+        choice JoinProposal : ContractId YogaMembershipEnrollment
+          controller member.id 
+          do
+            assertMsg "Invalid Age!!" (member.age>13 && member.age<71)
+            create YogaMembershipEnrollment with 
+              proposer = member.id
+              receiver = owner
+              eqnuiry = this 
+              status = "Interested"
+
+template YogaMembershipEnrollment 
+    with
+        proposer: Party
+        receiver: Party
+        eqnuiry:YogaEnquiry
+        status:Text
+    where
+      signatory proposer
+      observer receiver
+
+      key(eqnuiry.enquiryId,eqnuiry.member.id):(Int,Party)
+      maintainer key._2
+
+      choice AcceptMembership : ContractId YogaMembership
+        controller receiver 
+        do
+            assertMsg "Member is not yet ready to join " (status == "Interested")
+            create YogaMembership 
+              with 
+                  membership = eqnuiry 
+
+template YogaMembership
+  with
+    membership:YogaEnquiry
+  where
+      signatory membership.member.id,membership.owner
+      
+      key(membership.enquiryId,membership.member.id):(Int,Party)
+      maintainer key._2
+
+      choice UpdatePlan:ContractId YogaMembership      
+            with
+                newPlan:YogaPlan
+            controller membership.member.id
+            do
+                create this with 
+                    membership.plan = newPlan
+

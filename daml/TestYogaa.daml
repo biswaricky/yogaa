@@ -1,0 +1,188 @@
+module TestYogaa where
+
+import Main
+import Daml.Script
+import DA.Date.Types (Month(Aug))
+import DA.Date (date)
+
+-- user_setup
+setupUser : Text -> Script Party
+setupUser name = script do
+    -- Allocate the party
+    allocatedParty <- allocatePartyWithHint name (PartyIdHint name)
+    
+    -- Validate theuser ID
+    userId <- validateUserId name
+    
+    -- Create the user object 
+    createUser (User userId (Some allocatedParty)) [CanActAs allocatedParty]
+    return allocatedParty
+
+setup : Script ()
+setup = script do
+-- user_setup_begin
+  party1 <- setupUser "Bob" -- Yoga owner
+
+  party2 <- setupUser "Alice" --customer
+  party3 <- setupUser "Nikee" --customer
+  party4 <- setupUser "Biswa" --customer
+  
+  party5 <- setupUser "Pintu" --customer
+  party6 <- setupUser "Pintu1" --customer
+
+-- user_setup_end
+
+  let 
+    addr1 = Address with
+      house = "1/72"
+      street = "Wonderland"
+      city = "Canada"
+      pincode = 1111
+
+    addr2 = Address with
+      house = "3"
+      street = "Link Road"
+      city = "Bangalore"
+      pincode = 560108
+
+    --Alice personal details
+    person2 = Person with
+      id = party2
+      firstName = "Alice"
+      lastName = "Adams"
+      age = 14
+      birthDate = date 2000 Aug 10
+      mobile = "+1 66666 66666"
+      email = Some "alice@xyz.com"       
+      address = addr1
+
+    --Nikee personal details
+    person3 = Person with
+      id = party3
+      firstName = "Nikee"
+      lastName = "Patel"
+      age = 24
+      birthDate = date 1998 Aug 10
+      mobile = "+91 77777 77777"
+      email = Some "nikee@xyz.com"       
+      address = addr2
+
+    --Biswa personal
+    person4 = Person with
+      id = party4
+      firstName = "Biswa"
+      lastName = "Pintu"
+      age = 34
+      birthDate = date 1990 Aug 10
+      mobile = "+91 99999 99999"
+      email = Some "biswa@xyz.com"       
+      address = addr2
+
+
+    person5 = Person with
+      id = party5
+      firstName = "Biswa"
+      lastName = "Pintu"
+      age = 13
+      birthDate = date 2011 Aug 10
+      mobile = "+91 99999 99999"
+      email = Some "biswa@xyz.com"       
+      address = addr2
+
+    person6 = Person with
+      id = party6
+      firstName = "Biswa"
+      lastName = "Pintu"
+      age = 71
+      birthDate = date 1965 Aug 10
+      mobile = "+91 99999 99999"
+      email = Some "biswa@xyz.com"       
+      address = addr2
+
+
+--Alice eqnuire to join yoga class
+  aliceEnquire <- submit party2 do
+      createCmd YogaEnquiry with
+        member = person2
+        owner = party1
+        enquiryId = 1
+        enquiryDate = date 2023 Aug 15 
+        plan = Online
+        gender = Female
+  
+--Nikee eqnuire to join yoga class
+  nikeeEnquire <- submit party3 do
+      createCmd YogaEnquiry with
+        member = person3
+        owner = party1
+        enquiryId = 2
+        enquiryDate = date 2023 Aug 15 
+        plan = Offline
+        gender=Female
+  
+--Biswa eqnuire to join yoga class
+  biswaEnquire <- submit party4 do
+      createCmd YogaEnquiry with
+        member = person4
+        owner = party1
+        enquiryId = 3
+        enquiryDate = date 2023 Aug 15 
+        plan = Offline
+        gender=Male
+
+--Pintu eqnuire to join yoga class
+  pintuEnquiry <- submit party5 do
+      createCmd YogaEnquiry with
+        member = person5
+        owner = party1
+        enquiryDate = date 2023 Aug 15 
+        enquiryId = 4
+        plan = Offline
+        gender=Male
+
+--Pintu eqnuire to join yoga class
+  pintu1Enquiry <- submit party6 do
+      createCmd YogaEnquiry with
+        member = person6
+        owner = party1
+        enquiryId = 5
+        enquiryDate = date 2023 Aug 15 
+        plan = Offline
+        gender=Male
+
+
+
+--Alice perform RequestCallBack
+  enquire_1 <- submit party2 do exerciseCmd aliceEnquire RequestCallBack
+  
+
+  enquire_2 <- submit party3 do exerciseCmd nikeeEnquire JoinProposal
+
+--Biswa eecute BookFreeSession
+  enqire_3 <- submit party4 do exerciseCmd biswaEnquire BookFreeSession
+
+
+--display membership enorllment using query
+  members <- query  @YogaMembershipEnrollment party1
+  mapA(\x->debug x) members 
+
+--Bob accept the joining proposal for Nikee
+  enquire_2_1 <- submit party1 do exerciseCmd enquire_2 AcceptMembership
+
+--Nikee update the Yoga Plan
+  enquire_2_1_1 <- submit party3 do exerciseCmd enquire_2_1 UpdatePlan with newPlan = Flexi
+
+--unhappy1 -   Attempt to exercise a consumed contract #0:0 (Main:YogaEnquiry)
+  unhappy1 <- submitMustFail party5 do exerciseCmd aliceEnquire RequestCallBack
+
+--unhappy2 -   Invalid Age <14
+  unhappy2 <- submitMustFail party5 do exerciseCmd pintuEnquiry RequestCallBack
+
+--unhappy3 -   Invalid Age >70
+  unhappy3 <- submitMustFail party6 do exerciseCmd pintu1Enquiry RequestCallBack
+
+--unhappy4 - Member is not intrested
+  unhappy4 <- submitMustFail party1 do exerciseCmd enqire_3 AcceptMembership
+
+
+  return ()
