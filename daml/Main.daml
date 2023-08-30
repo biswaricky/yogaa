@@ -1,9 +1,10 @@
 module Main where
 
+import DA.Date (subDate, addDays, toDateUTC)
 
 data YogaPlan = Online | Offline | Flexi deriving (Show,Eq)
 data GenderType = Male | Female deriving (Show,Eq)
-
+data CallAction = FreeTrialOffer|ProposeJoin|CallCompleted deriving (Show,Eq)
 
 --information of address
 data Address = Address with
@@ -13,8 +14,7 @@ data Address = Address with
     pincode:Int
         deriving (Show,Eq)
 
-
---memer details
+--member details
 data Person = Person with
   id:Party
   firstName:Text
@@ -26,6 +26,7 @@ data Person = Person with
   address:Address
       deriving (Show,Eq)
 
+--enquiry template
 template YogaEnquiry
     with
         member:Person
@@ -43,25 +44,40 @@ template YogaEnquiry
         key(enquiryId,member.id):(Int,Party)
         maintainer key._2
 
-        choice RequestCallBack : ContractId YogaMembershipEnrollment
+        choice RequestCallBack : ContractId CallbackLogs with
+            preferredTime:Optional Time
+            contactNo:Text
+            note:Text
           controller member.id 
           do
             assertMsg "Invalid Age!!" (member.age>13 && member.age<71)
-            create YogaMembershipEnrollment with 
-              proposer = member.id
-              receiver = owner
-              eqnuiry = this 
-              status = "Callback"
+          
+            create CallbackLogs with 
+              preferredTime = preferredTime
+              contactNo = contactNo
+              note = note
+              callback = this 
 
-        choice BookFreeSession : ContractId YogaMembershipEnrollment
+        choice BookFreeSession : ContractId FreeTrial with
+            startDate:Date
+            endDate:Date
           controller member.id 
           do
+            now <- getTime 
+            let nowDate = toDateUTC now
+
+            assertMsg "Start Date can not be in past" (startDate > nowDate)
+            assertMsg "End Date can not be in past" (endDate > nowDate)
+            assertMsg "Start Date can not be after End Date" (startDate <= endDate)
+
+            assertMsg "Free Trail is available only upto 3 days" ((subDate endDate startDate)<3)
+
             assertMsg "Invalid Age!!" (member.age>13 && member.age<71)
-            create YogaMembershipEnrollment with 
-              proposer = member.id
-              receiver = owner
-              eqnuiry = this 
-              status = "FreeTrial"
+            create FreeTrial with 
+              startDate = startDate
+              endDate = endDate
+              feedback = None
+              free = this 
 
         choice JoinProposal : ContractId YogaMembershipEnrollment
           controller member.id 
@@ -71,28 +87,138 @@ template YogaEnquiry
               proposer = member.id
               receiver = owner
               eqnuiry = this 
-              status = "Interested"
 
+--Membership Enrollment
 template YogaMembershipEnrollment 
     with
         proposer: Party
         receiver: Party
         eqnuiry:YogaEnquiry
-        status:Text
     where
       signatory proposer
       observer receiver
 
-      key(eqnuiry.enquiryId,eqnuiry.member.id):(Int,Party)
+      --key(eqnuiry.enquiryId,eqnuiry.member.id):(Int,Party)
+      key(eqnuiry.enquiryId,proposer):(Int,Party)
       maintainer key._2
 
       choice AcceptMembership : ContractId YogaMembership
         controller receiver 
         do
-            assertMsg "Member is not yet ready to join " (status == "Interested")
             create YogaMembership 
               with 
                   membership = eqnuiry 
+
+template CallbackLogs
+  with
+    callback:YogaEnquiry
+    preferredTime:Optional Time
+    contactNo:Text
+    note:Text
+  where
+      signatory callback.member.id 
+      observer callback.owner
+      
+      key(callback.enquiryId,callback.member.id):(Int,Party)
+      maintainer key._2
+
+    
+      choice CallbackCompleted:Text with
+          callbackAction:CallAction  --FreeTrialOffer|ProposeJoin|CallbackCompleted
+        controller callback.owner
+        do
+          now <- getTime
+          let nowDate = toDateUTC now
+
+          if callbackAction==ProposeJoin then
+            do
+              create YogaMembershipEnrollment with 
+                proposer = callback.owner
+                receiver = callback.member.id
+                eqnuiry = callback 
+              return "JoinMembership"
+          else
+            do
+              if callbackAction==FreeTrialOffer then
+                do
+                  create FreeTrial with
+                    startDate = nowDate
+                    endDate = addDays nowDate 2
+                    feedback = None
+                    free = callback
+                  return "FreeTrial"
+              else
+                  return "CallCompleted"
+
+      nonconsuming choice CallbackFollowUp:ContractId CallbackLogs with
+          remark:Text  
+        controller callback.owner
+        do
+            exercise self UpdateCallLogs with newNote=remark    
+                    
+      choice UpdateCallLogs:ContractId CallbackLogs      
+            with
+                newNote:Text
+            controller callback.owner
+            do
+                create this with note = newNote
+
+template FreeTrial
+  with
+    free:YogaEnquiry
+    startDate:Date
+    endDate:Date
+    feedback:Optional Text
+  where
+      signatory free.member.id 
+      observer free.owner
+      
+      key(free.enquiryId,free.member.id):(Int,Party)
+      maintainer key._2
+
+      --member can give feedback
+      nonconsuming choice ReviewFeedback:ContractId FreeTrial with
+          remark:Text
+        controller free.member.id
+        do
+          exercise self UpdateFeedback with newFeedback = remark
+    
+      choice UpdateFeedback:ContractId FreeTrial with
+          newFeedback:Text
+        controller free.member.id
+        do
+          create this with feedback = Some newFeedback
+
+      --Owner can extend the free trial session
+      choice ExtendFreeTrial:ContractId FreeTrial with
+          newDate:Date
+        controller free.owner
+        do
+          create this with endDate = newDate
+  
+      --owner can cancel free trial -- archived
+      choice CancelFreeTrial:()
+        controller free.owner
+        do
+          return()
+          
+      --member init join proposal; owner has to accept
+      choice FreeToJoinbyMember:ContractId YogaMembershipEnrollment
+        controller free.member.id
+        do
+          create YogaMembershipEnrollment with 
+                proposer = free.member.id
+                receiver = free.owner
+                eqnuiry = free 
+
+      --owner init join proposal; member has to accept
+      choice FreeToJoinbyOwner:ContractId YogaMembershipEnrollment
+        controller free.owner
+        do
+          create YogaMembershipEnrollment with 
+                proposer = free.owner
+                receiver = free.member.id
+                eqnuiry = free 
 
 template YogaMembership
   with
@@ -103,6 +229,7 @@ template YogaMembership
       key(membership.enquiryId,membership.member.id):(Int,Party)
       maintainer key._2
 
+      --member can change plan
       choice UpdatePlan:ContractId YogaMembership      
             with
                 newPlan:YogaPlan
@@ -110,4 +237,9 @@ template YogaMembership
             do
                 create this with 
                     membership.plan = newPlan
-
+      
+      --owner can cancel membership -- archived
+      choice CancelMembership:()
+        controller membership.owner
+        do
+          return()
